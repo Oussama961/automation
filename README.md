@@ -67,4 +67,47 @@ pip install pandas openpyxl plotly matplotlib
 
 ---
 
+## Command Line Usage
+
+Below are example command lines for the main automation and dashboard scripts in this workspace.
+
+### Calendar/Event Automation (`Calendare` folder)
+
+**Add an event to a calendar:**
+```sh
+python Calendare/Calendar.py --load path/to/calendar.xlsx --add-event 2025-07-01 "Project Kickoff"
+```
+
+**Batch import events from CSV or text:**
+```sh
+python Calendare/Calendar.py --load path/to/calendar.xlsx --batch-import events.csv
+```
+
+**Generate a dashboard from all calendar files in a folder:**
+```sh
+python Calendare/generate_dashboard.py --folder Calendare/
+```
+
+---
+
+### Project Gantt Chart Automation (`Plans_tasks` folder)
+
+**Visualize a Gantt chart from a project Excel file:**
+```sh
+python Plans_tasks/GrantChartManager.py --load path/to/Project-Gantt-Chart.xlsx --gantt --output Plans_tasks/output/
+```
+
+**Generate a dashboard from all project files in a folder:**
+```sh
+python Plans_tasks/generate_dashboard.py --folder Plans_tasks/
+```
+
+---
+
+### General Notes
+
+- Use `--help` with any script to see all available options.
+- Output files (Excel, PDF, charts) are saved in the specified output folder or alongside the master dashboard file.
+- For custom sheet names, pivot columns, or value columns, use the corresponding script arguments (see script help).
+
 *This suite is designed for teams who want to automate and visualize project timelines, events, and KPIs directly from Excel files, with advanced reporting and export options.*
