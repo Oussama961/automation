@@ -87,6 +87,28 @@ class CalendarException(Exception):
 
 
 class ExcelCalendarManager:
+    def _rebuild_events_from_sheet(self):
+        """Scan the calendar sheet and rebuild the self.events dictionary from existing events in the Excel file."""
+        for row in self.calendar_sheet.iter_rows():
+            for cell in row:
+                if cell.value and isinstance(cell.value, str):
+                    lines = cell.value.split('\n')
+                    if not lines:
+                        continue
+                    date_obj = self._parse_date(lines[0])
+                    if date_obj:
+                        date_key = date_obj.strftime("%Y-%m-%d")
+                        for event_title in lines[1:]:
+                            if event_title.strip():
+                                cell_addr = f"{get_column_letter(cell.column)}{cell.row}"
+                                if date_key not in self.events:
+                                    self.events[date_key] = {}
+                                self.events[date_key][cell_addr] = {
+                                    'title': event_title.strip(),
+                                    'style': 'default',  # Could be improved to infer style
+                                    'datetime': date_obj
+                                }
+
     def __init__(self, workbook_path: str, calendar_sheet_name: str = "Calendar"):
         self.workbook_path = Path(workbook_path)
         self.calendar_sheet_name = calendar_sheet_name
@@ -110,6 +132,7 @@ class ExcelCalendarManager:
         }
         
         self._load_workbook()
+        self._rebuild_events_from_sheet()
     
     def _load_workbook(self) -> None:
         """Load the Excel workbook and calendar sheet."""

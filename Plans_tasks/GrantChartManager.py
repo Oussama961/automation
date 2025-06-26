@@ -30,7 +30,7 @@ class ProjectVisualizer:
         self.logger.info(f"Initialized with file: {self.file_path}")
         
     def load_data(self):
-        """Load project data with enhanced error handling"""
+        """Load project data with enhanced error handling, including dependencies"""
         try:
             # Verify file exists
             if not os.path.exists(self.file_path):
@@ -71,24 +71,36 @@ class ProjectVisualizer:
                 progress = sheet[f'D{row_index}'].value
                 start_date = sheet[f'E{row_index}'].value
                 end_date = sheet[f'F{row_index}'].value
+                # New: Read Predecessors (column G)
+                predecessors = sheet[f'G{row_index}'].value
                 
                 # Skip section headers (rows without dates)
                 if not start_date:
                     row_index += 1
                     continue
                 
+                # Parse predecessors as list of row numbers or task names
+                pred_list = []
+                if predecessors:
+                    for pred in str(predecessors).split(','):
+                        pred = pred.strip()
+                        if pred:
+                            pred_list.append(pred)
+                
                 data.append({
                     'Task': task_value,
                     'Assigned To': assigned_to,
                     'Progress': progress,
                     'Start': start_date,
-                    'End': end_date
+                    'End': end_date,
+                    'Row': row_index,  # Track row for dependency mapping
+                    'Predecessors': pred_list
                 })
                 
                 row_index += 1
             
             self.df = pd.DataFrame(data)
-            self.logger.info(f"Loaded {len(self.df)} tasks")
+            self.logger.info(f"Loaded {len(self.df)} tasks (with dependencies)")
             return True
             
         except Exception as e:
@@ -98,63 +110,84 @@ class ProjectVisualizer:
             self.logger.info("1. Verify the file path is correct")
             self.logger.info("2. Ensure the sheet name matches your project sheet")
             self.logger.info("3. Check that tasks start at row 6 with dates in columns E and F")
+            self.logger.info("4. If using dependencies, ensure a 'Predecessors' column exists in column G")
             return False
     
     def validate_data(self):
-        """Validate and clean the project data"""
+        """Validate and clean the project data with enhanced cleaning and entry checks"""
         if self.df is None or self.df.empty:
             self.logger.error("No data to validate")
             return False
-        
         try:
+            # Strip whitespace from all string fields
+            for col in ['Task', 'Assigned To']:
+                if col in self.df.columns:
+                    self.df[col] = self.df[col].astype(str).str.strip()
+            # Remove duplicate tasks (warn if found)
+            dupes = self.df[self.df.duplicated(['Task'], keep=False)]
+            if not dupes.empty:
+                self.logger.warning(f"Duplicate tasks found: {dupes['Task'].tolist()}")
+                self.df = self.df.drop_duplicates(['Task'], keep='first')
+            # Remove rows with missing required fields
+            required_fields = ['Task', 'Start', 'End']
+            before = len(self.df)
+            self.df = self.df.dropna(subset=required_fields)
+            after = len(self.df)
+            if after < before:
+                self.logger.warning(f"Removed {before - after} tasks missing required fields (Task, Start, End)")
             # Convert dates with error handling
             self.df['Start'] = pd.to_datetime(self.df['Start'], errors='coerce')
             self.df['End'] = pd.to_datetime(self.df['End'], errors='coerce')
-            
             # Remove rows with invalid dates
             initial_count = len(self.df)
             self.df = self.df.dropna(subset=['Start', 'End'])
             removed_count = initial_count - len(self.df)
             if removed_count > 0:
                 self.logger.warning(f"Removed {removed_count} tasks with invalid dates")
-            
-            # Handle missing values
+            # Normalize progress: accept 0-1 or 0-100
+            self.df['Progress'] = pd.to_numeric(self.df['Progress'], errors='coerce')
+            if self.df['Progress'].max() > 1:
+                self.df['Progress'] = self.df['Progress'] / 100.0
+            self.df['Progress'] = self.df['Progress'].clip(0, 1)
             self.df['Assigned To'].fillna('Unassigned', inplace=True)
             self.df['Progress'].fillna(0, inplace=True)
-            
-            # Ensure progress is between 0-100%
-            self.df['Progress'] = pd.to_numeric(self.df['Progress'], errors='coerce')
-            self.df['Progress'] = self.df['Progress'].clip(0, 1)
-            
             # Fix end dates that are before start dates
             invalid_dates = self.df[self.df['End'] < self.df['Start']]
             if not invalid_dates.empty:
                 self.logger.warning(f"Fixed {len(invalid_dates)} tasks with end date before start date")
                 self.df.loc[self.df['End'] < self.df['Start'], 'End'] = self.df['Start']
-            
             # Calculate durations
             self.df['Duration'] = (self.df['End'] - self.df['Start']).dt.days + 1
             self.df['Completed End'] = self.df['Start'] + pd.to_timedelta(
                 (self.df['Duration'] * self.df['Progress']).astype(int), 
                 unit='d'
             )
-            
+            # Validate Predecessors: warn if any do not exist
+            all_tasks = set(self.df['Task'])
+            all_rows = set(self.df['Row'])
+            for idx, row in self.df.iterrows():
+                for pred in row['Predecessors']:
+                    if pred.isdigit():
+                        if int(pred) not in all_rows:
+                            self.logger.warning(f"Task '{row['Task']}' has non-existent predecessor row: {pred}")
+                    else:
+                        if pred not in all_tasks:
+                            self.logger.warning(f"Task '{row['Task']}' has non-existent predecessor task: {pred}")
             self.validated = True
-            self.logger.info("Data validation complete")
+            self.logger.info("Data validation and cleaning complete")
             return True
-            
         except Exception as e:
             self.logger.error(f"Validation error: {str(e)}")
             return False
     
     def create_gantt_chart(self, output_dir):
-        """Create an interactive Gantt chart visualization"""
+        """Create an interactive Gantt chart visualization with dependency arrows"""
         if not self.validated:
             self.logger.error("Data not validated")
             return False
         
         try:
-            self.logger.info("Creating Gantt chart visualization")
+            self.logger.info("Creating Gantt chart visualization (with dependencies)")
             
             # Create figure
             fig = go.Figure()
@@ -202,6 +235,28 @@ class ProjectVisualizer:
                     hoverinfo='text',
                     hovertext=[f"<b>{row['Task']}</b>" for _, row in milestones.iterrows()]
                 ))
+            
+            # Add dependency arrows
+            for idx, row in self.df.iterrows():
+                for pred in row['Predecessors']:
+                    # Try to find predecessor by row number or task name
+                    pred_row = None
+                    if pred.isdigit():
+                        pred_row = self.df[self.df['Row'] == int(pred)]
+                    else:
+                        pred_row = self.df[self.df['Task'] == pred]
+                    if not pred_row.empty:
+                        pred_task = pred_row.iloc[0]
+                        # Arrow: from end of predecessor to start of current
+                        fig.add_shape(
+                            type='line',
+                            x0=pred_task['End'],
+                            y0=pred_task['Task'],
+                            x1=row['Start'],
+                            y1=row['Task'],
+                            line=dict(color='blue', width=2, dash='dot'),
+                            xref='x', yref='y'
+                        )
             
             # Update layout
             fig.update_layout(
